@@ -39,6 +39,10 @@ Structure to contain information about address of a service provider.  */
 #define RECYCLE_TIMEOUT             10 // 10 seconds
 #define SERVERHOSTNAME        "localhost"
 #define SERVERPORT            "20020"        
+#define SHEET_COLUMNS       9
+#define SHEET_ROWS          9
+#define MAX_RECALCULATES    128
+#define SHEET_BUF_SIZ       (MAX_RECALCULATES*SHEET_COLUMNS*SHEET_ROWS*2)
 
 volatile int gbContinueProcessingSpreadSheet = 1;
 /**
@@ -129,9 +133,9 @@ send_error:
 void drawSpreadSheet(char *spreadsheet_data) {
     system("clear");
     // draw the spread sheet now
-    
+
     // dummy drawing
-    printf("%s",spreadsheet_data);
+    printf("%s", spreadsheet_data);
 }
 
 static void *sig_handler(void *arg) {
@@ -140,16 +144,20 @@ static void *sig_handler(void *arg) {
 
     sigemptyset(&set);
     sigaddset(&set, SIGNAL_QUIT_SPREADSHEET);
-
+    s = pthread_sigmask(SIG_BLOCK, &set, NULL);
+    if (s != 0) {
+        printf("Fatal Error starting spreadsheet handler [%d]", errno);
+        exit(EXIT_FAILURE);
+    }
     for (;;) {
         sig = 0; // SANITY
         s = sigwait(&set, &sig);
         if (s == 0) {
-            s = pthread_sigmask(SIG_BLOCK, &set, NULL);
+            //s = pthread_sigmask(SIG_BLOCK, &set, NULL);
             if (sig == SIGNAL_QUIT_SPREADSHEET) {
                 handle_terminate();
             }
-            s = pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+            //s = pthread_sigmask(SIG_UNBLOCK, &set, NULL);
         }
     }
 }
@@ -161,8 +169,8 @@ void * networkProcessor(void *arg) {
     fd_set readfds;
     fd_set exceptfds;
     struct timeval timeout;
-    char recvbuf[4096];
-    size_t recvbuflen = 4096;
+    char recvbuf[SHEET_BUF_SIZ];
+    size_t recvbuflen = SHEET_BUF_SIZ;
 
     do {
 
@@ -258,10 +266,10 @@ void * networkProcessor(void *arg) {
                              * manage the buffer for the socket
                              */
 
-                            char received_data[4096];
+                            char received_data[SHEET_BUF_SIZ];
                             int ioffset = (int) (pstr_find - recvbuf);
 
-                            strncpy(received_data, recvbuf, 4096);
+                            strncpy(received_data, recvbuf, SHEET_BUF_SIZ);
                             received_data[ioffset] = '\0';
                             strncpy(recvbuf, &received_data[ioffset + 4], total - (ioffset + 4));
                             total = total - (ioffset + 4);
@@ -310,8 +318,8 @@ int main(int argc, char** argv) {
 
     int bOptVal = 1;
     int bOptLen = sizeof (int);
-    //struct linger lingerOptVal;
-    //int lingerOptLen = sizeof (struct linger);
+    struct linger lingerOptVal;
+    int lingerOptLen = sizeof (struct linger);
 
     char formula_data[1024];
 
@@ -391,10 +399,10 @@ int main(int argc, char** argv) {
          * we set linger so that is we crash the "**ALL**" of the last data will
          * still be sent
          */
-        //lingerOptVal.l_onoff = 1; // true - turn linger on
-        //lingerOptVal.l_linger = RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
+        lingerOptVal.l_onoff = 0; // true - turn linger on
+        lingerOptVal.l_linger = RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
         bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_KEEPALIVE, (char*) &bOptVal, bOptLen);
-        //bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_LINGER, (char*) &lingerOptVal, lingerOptLen);
+        bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_LINGER, (char*) &lingerOptVal, lingerOptLen);
 
         /**
          * Create a thread to handle termination signals for network handler thread
@@ -437,8 +445,8 @@ int main(int argc, char** argv) {
              *********************************************************************
              */
             // make sure to terminate with "\r\n\r\n"
-            strncat(formula_data,"\r\n\r\n",1023);
-            
+            strncat(formula_data, "\r\n\r\n", 1023);
+
             rc = sendall(commSocket, formula_data, strlen(formula_data), 0);
             if (rc) {
                 /**

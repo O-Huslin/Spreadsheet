@@ -89,6 +89,8 @@ char sheetCopy[SHEET_BUF_SIZ];
 
 cell_t sheet[SHEET_ROWS][SHEET_COLUMNS];
 
+int numUsers = 0;
+
 int isCellRef(char * cellref) {
     int nref = 0;
     do {
@@ -182,7 +184,7 @@ int isFormula(char *formula) {
         c1[0] = formula[offset];
         r1[0] = formula[offset + 1];
 
-        offset+=2;
+        offset += 2;
         if (formula[offset] != ',')
             break;
         offset++;
@@ -208,7 +210,7 @@ int isFormula(char *formula) {
         offset++;
         if (formula[offset] != '\0')
             break;
-        valid=1;
+        valid = 1;
     } while (0);
     return valid;
 }
@@ -538,9 +540,11 @@ static void *sig_sendSheethandler() {
 }
 
 void updateSpreadSheet(char *data) {
+    int cType;
+    int offset = 0;
+
     do {
-        int cType;
-        int offset = 0;
+
 
         if (pthread_mutex_trylock(&gmutex_SSheet)) {
             usleep(100000); // microseconds
@@ -591,6 +595,12 @@ void updateSpreadSheet(char *data) {
         // package the last spread sheet in this variable
         // while no other thread can change it
         // strLastSpreadSheet == last spread sheet
+
+        //The first element returned in the spreadsheet data ser
+        //is the number of users
+        
+        offset += snprintf(&strLastSpreadSheet[offset],
+                SHEET_BUF_SIZ - offset - 1, "%d\r\n", numUsers);
         /**
          * format must be: "1\r\n2\r\n3\r\n4\r\n/5\r\n6\r\n7\r\n8\r\n9\r\n\r\n"
          */
@@ -739,7 +749,7 @@ void * serverProcessor(void *arg) {
                             total = total - (ioffset + 4);
                             recvbuf[total] = '\0';
 
-                            if (/*firstClientSocket == commSocket &&*/ !strcmp(received_data, "SHUTDOWN")) {
+                            if (firstClientSocket == commSocket && !strcmp(received_data, "SHUTDOWN")) {
                                 gbContinueProcessingSpreadSheet = 0; // stop processing
                                 break;
                             } else {
@@ -985,6 +995,7 @@ int main(int argc, char** argv) {
                         // DUMMY TEST LINKED LIST -- DO IT PROPERLY
                         plist->next = listTop;
                         listTop = plist;
+                        numUsers++;
                         //-------------------------------------
                         // TODO
                         // add "plist" to the linked list
