@@ -4,12 +4,17 @@
         <activeConfTypeElem>1</activeConfTypeElem>
         <activeConfIndexElem>0</activeConfIndexElem>
     </data>
-    <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="1">
+    <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="4">
         <file>
             <url>main.c</url>
-            <bookmark id="1">
+            <bookmark id="3">
                 <name/>
-                <line>265</line>
+                <line>391</line>
+                <key/>
+            </bookmark>
+            <bookmark id="4">
+                <name/>
+                <line>619</line>
                 <key/>
             </bookmark>
         </file>

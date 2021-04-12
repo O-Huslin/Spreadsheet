@@ -1,10 +1,20 @@
 /* 
  * File:   main.c
- * Author: Kathilee Ledgister
- *
+ * Author: Kathilee Ledgister 620121618
+ *         Okeno Christie 620096966
+ *         Orley Huslin 620106728
+ * 
  * Created on April 4, 2021, 11:53 AM
  */
-
+/**
+ * IMPROVEMENTS
+ * 1 Formulas use cells to calculate their values, even if the cell has another formula
+ * 2 Spreadsheets can be saved to a file specified by the user
+ * 3 Spreadsheets can be reloaded from a saved file
+ * 4 All commands require '***' in front. eg. to shut down the spreadsheet enter "***SHUTDOWN"
+ * 5 To save a file enter "***SAVE filename.extension"
+ * 6 To load a file enter "***LOAD filename.extension"
+ */
 /* Extension from POSIX.1:2001. 
 Structure to contain information about address of a service provider.  */
 #define _POSIX_C_SOURCE 200112L // MUST be decleared
@@ -37,9 +47,9 @@ Structure to contain information about address of a service provider.  */
 /*
  * Two user defined signals we use to communicate internally
  */
-#define RECYCLE_TIMEOUT             10 // 10 seconds
-#define SERVERHOSTNAME        NULL //"localhost"
-#define SERVERPORT            "20020"        
+#define RECYCLE_TIMEOUT     10 // 10 seconds
+#define SERVERHOSTNAME      NULL //"localhost"
+#define SERVERPORT          "20020"        
 #define CELL_TYPE_STRING    1
 #define CELL_TYPE_FLOAT     2
 #define CELL_TYPE_FORMULA   3
@@ -48,25 +58,22 @@ Structure to contain information about address of a service provider.  */
 #define SHEET_ROWS          9
 #define MAX_RECALCULATES    128
 #define SHEET_BUF_SIZ       (MAX_RECALCULATES*SHEET_COLUMNS*SHEET_ROWS*2)
-
-volatile int gbContinueProcessingSpreadSheet = 1;
-pthread_t pthreadHandler;
-int firstClientSocket = -1;
-
+#define STR_CELL_SIZE       128
 /*
  * One user defined signals we use to communicate internally
  */
 #define SIGNAL_SEND_SPREADSHEET (SIGRTMIN+1)
+#define SPREADSHEET_FILE        "./worksheet.work"
+
 
 /**
- * floward declare list
+ * forward declare list
  */
-#define STR_CELL_SIZE   128
+
 typedef struct _tag_linkedlist clientlist_t;
 
 typedef struct _tag_linkedlist {
     int clientSocket;
-
     pthread_t pthreadClient;
     clientlist_t *next;
 } clientlist_t;
@@ -85,11 +92,40 @@ pthread_mutex_t gmutex_SSheet;
  * package the last spread sheet here for sending
  */
 char strLastSpreadSheet[SHEET_BUF_SIZ];
-char sheetCopy[SHEET_BUF_SIZ];
 
+char sheetCopy[SHEET_BUF_SIZ];
+volatile int gbContinueProcessingSpreadSheet = 1;
+pthread_t pthreadHandler = 0;
 cell_t sheet[SHEET_ROWS][SHEET_COLUMNS];
 
-int numUsers = 0;
+//Get the number of users
+
+int getNumUsers() {
+    int count = 0;
+    clientlist_t *list;
+    for (list = listTop; list; list = list->next, count++);
+    return count;
+}
+
+//Delete the user from the list
+
+void deleteListClient(int socket) {
+    clientlist_t *list, *prev;
+
+    // for client in the linked list
+    for (list = prev = listTop; list; prev = list, list = list->next) {
+        if (list->clientSocket == socket) {
+            if (list == listTop) {
+                listTop = list->next;
+            } else {
+                prev->next = list->next;
+            }
+            free(list);
+        }
+    }
+}
+
+//Test if a text value is a cell reference
 
 int isCellRef(char * cellref) {
     int nref = 0;
@@ -109,7 +145,7 @@ int isCellRef(char * cellref) {
 }
 
 /*
-Gets the cell reference from formula 
+Gets the column of the cell reference
  */
 int getCellRefColumn(char * cellref) {
     int nref = -1;
@@ -122,6 +158,9 @@ int getCellRefColumn(char * cellref) {
     return nref;
 }
 
+/*
+Gets the row of the cell reference
+ */
 int getCellRefRow(char * cellref) {
     int nref = -1;
     do {
@@ -132,6 +171,8 @@ int getCellRefRow(char * cellref) {
     } while (0);
     return nref;
 }
+
+//Get the type of the formula
 
 int getFormulaType(char *formula) {
     int ftype = 0;
@@ -155,6 +196,8 @@ int getFormulaType(char *formula) {
     } while (0);
     return ftype;
 }
+
+//Check if the string provided is a valid formula
 
 int isFormula(char *formula) {
     int valid = 0;
@@ -238,6 +281,8 @@ int isnumstr(char *str) {
     return ret;
 }
 
+//Gets the type of the data sent by the client-user
+
 int getDataType(char *celldata) {
     int cType = CELL_TYPE_INVALID;
     do {
@@ -263,11 +308,14 @@ int getDataType(char *celldata) {
     return cType;
 }
 
+//function to compute the average
+
 float fnAverage(int row, int col, char *r1, char *c1) {
     float sum = 0.0f;
     int count = 0;
     int r, c;
 
+    //loop over all the 1D cells
     for (int j = r1[0]; j <= r1[1]; j++)
         for (int i = c1[0]; i <= c1[1]; i++) {
             r = j - '1';
@@ -284,11 +332,14 @@ float fnAverage(int row, int col, char *r1, char *c1) {
     return sheet[row][col].fval;
 }
 
+//Function to compute the range
+
 float fnRange(int row, int col, char *r1, char *c1) {
     float rmin = FLT_MAX;
     float rmax = -FLT_MAX;
     int r, c;
 
+    //loop over all the 1D cells
     for (int j = r1[0]; j <= r1[1]; j++)
         for (int i = c1[0]; i <= c1[1]; i++) {
             r = j - '1';
@@ -310,10 +361,13 @@ float fnRange(int row, int col, char *r1, char *c1) {
     return sheet[row][col].fval;
 }
 
+//Function to compute the sum
+
 float fnSum(int row, int col, char *r1, char *c1) {
     float sum = 0.0f;
     int r, c;
 
+    //loop over all the 1D cells
     for (int j = r1[0]; j <= r1[1]; j++)
         for (int i = c1[0]; i <= c1[1]; i++) {
             r = j - '1';
@@ -327,6 +381,9 @@ float fnSum(int row, int col, char *r1, char *c1) {
     sheet[row][col].updated = 1;
     return sheet[row][col].fval;
 }
+
+//Compute the value associated with a cell
+//Return whether the value has changed or not
 
 int evaluateCell(int col, int row) {
     int changed = 0;
@@ -385,6 +442,16 @@ int evaluateCell(int col, int row) {
     return changed;
 }
 
+//Evaluate the entire spreadsheet
+//If a cell value changes during the evaluation then we must
+//recalculate the entire spreadsheet
+//We repeat this until no values are changing or we have repeated 
+//the procedure a maximum of 'MAX_RECALCULATES' times. 
+//If we reach the maximum then we consider that there is a circular 
+//reference in the spreadsheet. When we return the circular reference
+//the formula will be rejected and the spreadsheet will reset to its original
+//value.
+
 int evaluateSheet(int mode) {
     int circ = 0;
     int changed = 0;
@@ -415,6 +482,7 @@ int evaluateSheet(int mode) {
         circ = 1; //we are calling this a circular reference
     return circ;
 }
+//Send all input data to the user.
 
 int sendall(int socket, const char *buf, unsigned int len, int flags) {
     int total = 0; // how many bytes we've sent
@@ -477,16 +545,13 @@ send_error:
     return rc; // return bytesleft: should be (0) on success
 }
 
+//Send the spreadsheet to all users in the linked list.
+
 void notifyAllUsers(char *sheetCopy) {
     clientlist_t *list;
     int rc = 0;
 
-    //-------------------------------------
-    // TODO
-    // notify all users in the linked list
-    //-------------------------------------
-
-    // for client in the linlked list
+    // for client in the linked list
     for (list = listTop; list; list = list->next) {
         rc = sendall(list->clientSocket, sheetCopy, strlen(sheetCopy), 0);
         if (rc) {
@@ -502,6 +567,9 @@ void notifyAllUsers(char *sheetCopy) {
         }
     }
 }
+
+//The signalhandler allows serializing spreadsheet send requests
+//to the clients.
 
 static void *sig_sendSheethandler() {
     sigset_t set;
@@ -539,68 +607,30 @@ static void *sig_sendSheethandler() {
     }
 }
 
-void updateSpreadSheet(char *data) {
-    int cType;
+/**
+ * refresh the spreadsheet and update the sending cache.
+ * Format the spreadsheet to be sent to the user.
+ */
+void refreshSpreadSheet() {
     int offset = 0;
 
     do {
-
-
         if (pthread_mutex_trylock(&gmutex_SSheet)) {
             usleep(100000); // microseconds
             // when you wake up
             continue;
         }
 
-        //-------------------------------------
-        // update the spread sheet
-        //check that the data is properly formatted
-        //the third character must be an '=' sign
-        if (data == NULL || strlen(data) < 4 || data[2] != '=')
-            break;
-
-        if ((cType = getDataType(&data[3])) == CELL_TYPE_INVALID)
-            break;
-
-        int column = getCellRefColumn(data);
-        int row = getCellRefRow(data);
-
-        if (column == -1 || row == -1)
-            break;
-
-        char savedCell[STR_CELL_SIZE];
-        int savedType = sheet[row][column].type;
-        strncpy(savedCell, sheet[row][column].sval, STR_CELL_SIZE);
-
-
-        sheet[row][column].type = cType;
-        strncpy(sheet[row][column].sval, &data[3], STR_CELL_SIZE - 1);
-        sheet[row][column].sval[STR_CELL_SIZE - 1] = '\0'; //SANITY CHECK
-
-        /**
-         * if the evaluation requires more than "MAX_RECALCULATES"
-         * interations then we are calling this acircular refernce. 
-         * We will not put this formula in the spreadsheet
-         */
-        if (evaluateSheet((cType == CELL_TYPE_FORMULA ? 1 : 0))) {
-            /**
-             * We detect a circular reference so put back the original data
-             */
-            sheet[row][column].type = savedType;
-            strncpy(sheet[row][column].sval, savedCell, STR_CELL_SIZE);
-            evaluateSheet(0);
-            break;
-        }
-
         // package the last spread sheet in this variable
         // while no other thread can change it
         // strLastSpreadSheet == last spread sheet
 
+        evaluateSheet(0);
         //The first element returned in the spreadsheet data ser
         //is the number of users
-        
+
         offset += snprintf(&strLastSpreadSheet[offset],
-                SHEET_BUF_SIZ - offset - 1, "%d\r\n", numUsers);
+                SHEET_BUF_SIZ - offset - 1, "%d\r\n", getNumUsers());
         /**
          * format must be: "1\r\n2\r\n3\r\n4\r\n/5\r\n6\r\n7\r\n8\r\n9\r\n\r\n"
          */
@@ -609,8 +639,13 @@ void updateSpreadSheet(char *data) {
                 switch (sheet[j][i].type) {
                     case CELL_TYPE_FLOAT:
                     case CELL_TYPE_FORMULA:
-                        offset += snprintf(&strLastSpreadSheet[offset],
-                                SHEET_BUF_SIZ - offset - 1, "%f\r\n", sheet[j][i].fval);
+                        if (sheet[j][i].fval == 0.0f) {
+                            offset += snprintf(&strLastSpreadSheet[offset],
+                                    SHEET_BUF_SIZ - offset - 1, " \r\n");
+                        } else {
+                            offset += snprintf(&strLastSpreadSheet[offset],
+                                    SHEET_BUF_SIZ - offset - 1, "%f\r\n", sheet[j][i].fval);
+                        }
                         break;
                     default:
                         offset += snprintf(&strLastSpreadSheet[offset],
@@ -636,6 +671,168 @@ void updateSpreadSheet(char *data) {
     } while (1);
 }
 
+/**
+ * update the spreadsheet with the new data.
+ * @param data - From the the client
+ */
+void updateSpreadSheet(char *data) {
+    int cType;
+    do {
+        if (pthread_mutex_trylock(&gmutex_SSheet)) {
+            usleep(100000); // microseconds
+            // when you wake up
+            continue;
+        }
+
+        do {
+            //-------------------------------------
+            // update the spread sheet
+            //check that the data is properly formatted
+            //the third character must be an '=' sign
+            if (data == NULL || strlen(data) < 4 || data[2] != '=')
+                break;
+
+            if ((cType = getDataType(&data[3])) == CELL_TYPE_INVALID)
+                break;
+
+            int column = getCellRefColumn(data);
+            int row = getCellRefRow(data);
+
+            if (column == -1 || row == -1)
+                break;
+
+            char savedCell[STR_CELL_SIZE];
+            int savedType = sheet[row][column].type;
+            strncpy(savedCell, sheet[row][column].sval, STR_CELL_SIZE);
+
+
+            sheet[row][column].type = cType;
+            strncpy(sheet[row][column].sval, &data[3], STR_CELL_SIZE - 1);
+            sheet[row][column].sval[STR_CELL_SIZE - 1] = '\0'; //SANITY CHECK
+
+            /**
+             * if the evaluation requires more than "MAX_RECALCULATES"
+             * interations then we are calling this acircular refernce. 
+             * We will not put this formula in the spreadsheet
+             */
+            /**
+             * if the evaluation requires more than "MAX_RECALCULATES"
+             * interations then we are calling this acircular refernce. 
+             * We will not put this formula in the spreadsheet
+             */
+            if (evaluateSheet(cType == CELL_TYPE_FORMULA ? 1 : 0)) {
+                /**
+                 * We detect a circular reference so put back the original data
+                 */
+                sheet[row][column].type = savedType;
+                strncpy(sheet[row][column].sval, savedCell, STR_CELL_SIZE);
+                evaluateSheet(0);
+                break;
+            }
+        } while (0);
+        pthread_mutex_unlock(&gmutex_SSheet);
+
+        refreshSpreadSheet();
+
+        break;
+
+    } while (1);
+}
+
+/**
+ * Save the spreadsheet to the user specified file.
+ * If no file is specified, save it to the default 
+ * spreadsheet - 'SPREADSHEET_FILE'. Spreadsheet filenames 
+ * are case sensitive in linux.
+ * @param bookname
+ */
+void saveWorksheet(char *bookname) {
+    int fd = -1;
+    int ival;
+    do {
+        /**
+         * ensure only one user at a time can modify the spreadsheet
+         */
+        if (pthread_mutex_trylock(&gmutex_SSheet)) {
+            usleep(100000); // microseconds
+            // when you wake up
+            continue;
+        }
+
+        do {
+            fd = open((bookname == NULL || bookname[0] == '\0' ? SPREADSHEET_FILE : bookname),
+                    O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+            if (fd == -1) {
+                printf("Failed to OPEN/CREATE spreadsheet file [%d]\n", errno);
+                break;
+            }
+            ival = sizeof (cell_t) * SHEET_ROWS*SHEET_COLUMNS;
+            if (write(fd, sheet, ival) != ival) {
+                printf("Error Writing spreadsheet [%d]", errno);
+                break;
+            }
+        } while (0);
+
+        if (fd != -1) {
+            close(fd);
+            fd = -1;
+        }
+        //-------------------------------------
+        pthread_mutex_unlock(&gmutex_SSheet);
+
+        refreshSpreadSheet(); //Resend the saved spreadsheets to the user.
+    } while (0);
+}
+
+/**
+ * Load the spreadsheet specified by the user
+ * If no file is specified, save it to the default 
+ * spreadsheet - 'SPREADSHEET_FILE'. Spreadsheet filenames 
+ * are case sensitive in linux.
+ * @param bookname
+ */
+void loadWorksheet(char *bookname) {
+    int fd = -1;
+    int ival;
+    do {
+        if (pthread_mutex_trylock(&gmutex_SSheet)) {
+            usleep(100000); // microseconds
+            // when you wake up
+            continue;
+        }
+
+        do {
+            fd = open((bookname == NULL || bookname[0] == '\0' ? SPREADSHEET_FILE : bookname),
+                    O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+            if (fd == -1) {
+                printf("Failed to OPEN/CREATE spreadsheet file [%d]\n", errno);
+                break;
+            }
+            ival = sizeof (cell_t) * SHEET_ROWS*SHEET_COLUMNS;
+            if (read(fd, sheet, ival) != ival) {
+                memset(sheet, 0x00, ival);
+                printf("Error Writing spreadsheet [%d]", errno);
+                break;
+            }
+        } while (0);
+
+        if (fd != -1) {
+            close(fd);
+            fd = -1;
+        }
+        //-------------------------------------
+        pthread_mutex_unlock(&gmutex_SSheet);
+
+        refreshSpreadSheet();
+    } while (0);
+}
+
+/**
+ * One thread is created to manage each user connection.
+ * This function handles sending the updated spreadsheet to a specific client.
+ * @param arg - the socket file descriptor
+ * @return 
+ */
 void * serverProcessor(void *arg) {
     int commSocket = -1;
     int ires;
@@ -645,6 +842,7 @@ void * serverProcessor(void *arg) {
     struct timeval timeout;
     char recvbuf[4096];
     size_t recvbuflen = 4096;
+    int continueHandler = 1;
 
     if (arg == NULL) {
         return NULL;
@@ -668,6 +866,19 @@ void * serverProcessor(void *arg) {
         switch (ires) {
             case -1: // error occurred
                 switch (errno) {
+                    case ECONNRESET:
+                        //on connection reset we terminate this thread
+                        //If this is the first user, we terminate the server
+                        // delete client from the list
+                        if (listTop && listTop->clientSocket == commSocket) {
+                            gbContinueProcessingSpreadSheet = 0; // stop processing
+                        }
+                        deleteListClient(commSocket);
+                        // terminate this client handler
+                        printf("Socket Connection TERMINATED by client\n");
+                        continueHandler = 0;
+                        // delete us from the linked list
+                        break;
                     case EBADF:
                         /**
                          * An invalid file descriptor was given in one of the sets.
@@ -700,7 +911,7 @@ void * serverProcessor(void *arg) {
 
             default:
                 if (FD_ISSET(commSocket, &exceptfds)) {
-                    printf("Socket Exception: Error reading scoket\n");
+                    printf("Socket Exception: Error reading socket\n");
                 } else if (FD_ISSET(commSocket, &readfds)) {
                     ires = recv(commSocket, &recvbuf[total], recvbuflen - total, 0);
                     /**
@@ -709,6 +920,19 @@ void * serverProcessor(void *arg) {
 
                     if (ires == -1) {
                         switch (errno) {
+                            case ECONNRESET:
+                                //on connection reset we terminate this thread
+                                //If this is the first user, we terminate the server
+                                // delete client from the list
+                                if (listTop && listTop->clientSocket == commSocket) {
+                                    gbContinueProcessingSpreadSheet = 0; // stop processing
+                                }
+                                deleteListClient(commSocket);
+                                // terminate this client handler
+                                printf("Socket Connection TERMINATED by client\n");
+                                continueHandler = 0;
+                                // delete us from the linked list
+                                break;
                             case EWOULDBLOCK:
                                 /**
                                  * reading would blcok the socket - what sould we do
@@ -731,6 +955,11 @@ void * serverProcessor(void *arg) {
                         // it could be 0: for zero length data
                         // store it in the large buffers
                         // "\r\n\r\n" length = 4
+                        /**
+                         * when we receive the "\r\n\r\n" we know that this is
+                         * the end of a command from the client. Process the command and save
+                         * the rest of the data that may be in the buffer, if any.
+                         */
 
                         total += ires;
                         recvbuf[total] = '\0';
@@ -749,9 +978,30 @@ void * serverProcessor(void *arg) {
                             total = total - (ioffset + 4);
                             recvbuf[total] = '\0';
 
-                            if (firstClientSocket == commSocket && !strcmp(received_data, "SHUTDOWN")) {
+                            /**
+                             * The four commands allowed by the server.
+                             * '***' must be entered before the commands. 
+                             * This allows these values to be types into the spreadsheet also.
+                             * @param arg
+                             * @return 
+                             */
+                            if (listTop && listTop->clientSocket == commSocket
+                                    && !strcmp(received_data, "***SHUTDOWN")) {
                                 gbContinueProcessingSpreadSheet = 0; // stop processing
-                                break;
+                                continueHandler = 0;
+                            } else if (listTop && listTop->clientSocket == commSocket
+                                    && !strncasecmp(received_data, "***SAVE", 7)) {
+                                int noffset = 7;
+                                for (; isspace(received_data[noffset]); noffset++);
+                                saveWorksheet(&received_data[noffset]); // save worksheet
+                            } else if (listTop && listTop->clientSocket == commSocket
+                                    && !strncasecmp(received_data, "***LOAD", 7)) {
+                                int noffset = 7;
+                                for (; isspace(received_data[noffset]); noffset++);
+                                loadWorksheet(&received_data[noffset]); // load worksheet
+                            } else if (!strcasecmp(received_data, "***REFRESH")) {
+                                // notify all users in the linked list
+                                refreshSpreadSheet();
                             } else {
                                 /**
                                  * upon receipt of data - just update the spreadsheet
@@ -763,7 +1013,7 @@ void * serverProcessor(void *arg) {
                 }
                 break;
         }
-    } while (gbContinueProcessingSpreadSheet);
+    } while (gbContinueProcessingSpreadSheet && continueHandler);
 
     return NULL;
 }
@@ -860,11 +1110,11 @@ int main(int argc, char** argv) {
          * set the keep alive so that the socket is always open
          * the connection is not closed due to inactivity
          * 
-         * we set linger so that is we crash the "**ALL**" of the last data will
-         * still be sent
+         * we set linger so that sockets receive 'ECONNRESET' upon termination
+         * or if the client program crashes
          */
-        lingerOptVal.l_onoff = 0; // true - turn linger on
-        lingerOptVal.l_linger = RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
+        lingerOptVal.l_onoff = 1; // true - turn linger on
+        lingerOptVal.l_linger = 0; //RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
         bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_KEEPALIVE, (char*) &bOptVal, bOptLen);
         bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_LINGER, (char*) &lingerOptVal, lingerOptLen);
 
@@ -948,8 +1198,8 @@ int main(int argc, char** argv) {
                             break;
                     }
                 } else {
-                    lingerOptVal.l_onoff = 0;
-                    lingerOptVal.l_linger = RECYCLE_TIMEOUT; // 10 seconds
+                    lingerOptVal.l_onoff = 1;
+                    lingerOptVal.l_linger = 0; //RECYCLE_TIMEOUT; // 10 seconds
                     bOptLen = setsockopt(cSocket, SOL_SOCKET, SO_KEEPALIVE, (char*) &bOptVal, bOptLen);
                     bOptLen = setsockopt(cSocket, SOL_SOCKET, SO_LINGER, (char*) &lingerOptVal, lingerOptLen);
 
@@ -972,6 +1222,9 @@ int main(int argc, char** argv) {
                         }
                         *pclientSocket = cSocket;
 
+                        /**
+                         * Start a handler thread for this client
+                         */
                         pthread_t thread;
                         if (pthread_create(&thread, NULL, serverProcessor, (void *) pclientSocket) != 0) {
                             printf("Error Setting up session for a client\n");
@@ -988,18 +1241,19 @@ int main(int argc, char** argv) {
                         plist->clientSocket = cSocket;
                         plist->next = NULL;
                         plist->pthreadClient = thread;
-                        if (firstClientSocket == -1) {
-                            firstClientSocket = cSocket;
-                            /*this is the controller socket client*/
+
+                        /**
+                         * The client at the top of the list is the "first client"
+                         * that client controls the spread sheet operations
+                         */
+                        if (listTop == NULL) {
+                            listTop = plist;
+                        } else {
+                            clientlist_t *list;
+                            // for client in the linked list
+                            for (list = listTop; list->next; list = list->next);
+                            list->next = plist;
                         }
-                        // DUMMY TEST LINKED LIST -- DO IT PROPERLY
-                        plist->next = listTop;
-                        listTop = plist;
-                        numUsers++;
-                        //-------------------------------------
-                        // TODO
-                        // add "plist" to the linked list
-                        //-------------------------------------
                     } while (0);
                 }
             }
@@ -1015,7 +1269,8 @@ int main(int argc, char** argv) {
         pthread_join(pthreadHandler, NULL);
     }
 
-    // for client in the linlked list
+    // for client in the linked list
+    //Try to properly terminate all the threads
     clientlist_t *list;
     for (list = listTop, listTop = NULL; list;) {
         // tell the other clients to shutdown

@@ -1,8 +1,20 @@
 /* 
  * File:   main.c
- * Author: Kathilee Ledgister
+ * Author: Kathilee Ledgister 620121618
+ *         Okeno Christie 620096966
+ *         Orley Huslin 620106728
  *
  * Created on April 4, 2021, 11:53 AM
+ */
+
+/**
+ * IMPROVEMENTS
+ * 1 Formulas use cells to calculate their values, even if the cell has another formula
+ * 2 Spreadsheets can be saved to a file specified by the user
+ * 3 Spreadsheets can be reloaded from a saved file
+ * 4 All commands require '***' in front. eg. to shut down the spreadsheet enter "***SHUTDOWN"
+ * 5 To save a file enter "***SAVE filename.extension"
+ * 6 To load a file enter "***LOAD filename.extension"
  */
 
 /* Extension from POSIX.1:2001. 
@@ -43,6 +55,9 @@ Structure to contain information about address of a service provider.  */
 #define SHEET_ROWS          9
 #define MAX_RECALCULATES    128
 #define SHEET_BUF_SIZ       (MAX_RECALCULATES*SHEET_COLUMNS*SHEET_ROWS*2)
+#define CELL_DISPLAY_SIZ    12
+#define HORZ_CHAR           '-'
+#define VERT_CHAR           '|'
 
 volatile int gbContinueProcessingSpreadSheet = 1;
 /**
@@ -54,6 +69,9 @@ int gcommSocket = -1;
 pthread_t pthreadClient;
 pthread_t pthreadHandler;
 
+/**
+ * Handle termination notifications from the server.
+ */
 void handle_terminate() {
     do {
         gbContinueProcessingSpreadSheet = 0;
@@ -69,6 +87,14 @@ void handle_terminate() {
     } while (0);
 }
 
+/**
+ * Send all the input data to the server
+ * @param socket
+ * @param buf
+ * @param len
+ * @param flags
+ * @return 
+ */
 int sendall(int socket, const char *buf, unsigned int len, int flags) {
     int total = 0; // how many bytes we've sent
     int bytesleft = len; // how many we have left to send
@@ -130,14 +156,86 @@ send_error:
     return rc; // return bytesleft: should be (0) on success
 }
 
+/**
+ * Draw the spreadsheet
+ * @param spreadsheet_data- from the server
+ */
 void drawSpreadSheet(char *spreadsheet_data) {
-    system("clear");
-    // draw the spread sheet now
+    char *cpos, *nextpos;
+    char cbuff[CELL_DISPLAY_SIZ + 1];
+    int s;
+    system("clear"); //Clear the terminal screen
+    // draw the spread sheet now 
+    cpos = nextpos = spreadsheet_data;
 
-    // dummy drawing
-    printf("%s", spreadsheet_data);
+    nextpos = strstr(cpos, "\r\n");
+    nextpos[0] = '\0';
+    for (s = 0; cpos[s] && isspace(cpos[s]); s++);
+    strncpy(cbuff, &cpos[s], CELL_DISPLAY_SIZ);
+    cbuff[CELL_DISPLAY_SIZ] = '\0';
+    nextpos[0] = '\r';
+
+    printf("The number of spreadsheet users is: [%s]\n\n", cbuff);
+    printf("   ");
+    for (int j = 0; j < SHEET_COLUMNS; j++) {
+        printf("      %c      ", 'A' + j);
+    }
+    printf("\n");
+
+    // printf("  %c\n", HORZ_CHAR);
+    for (int i = 0; i < SHEET_ROWS; i++) {
+        printf("   ");
+        for (int j = 0; j < SHEET_COLUMNS; j++) {
+            printf("%c", HORZ_CHAR);
+            for (int k = 0; k < CELL_DISPLAY_SIZ; k++) {
+                printf("%c", HORZ_CHAR);
+            }
+        }
+        printf("%c\n", HORZ_CHAR);
+
+        printf("%2d ", i + 1);
+        for (int j = 0; j < SHEET_COLUMNS; j++) {
+            printf("%c", VERT_CHAR);
+            nextpos += 2;
+            cpos = nextpos;
+
+            nextpos = strstr(cpos, "\r\n");
+            if (nextpos != NULL)
+                nextpos[0] = '\0';
+            for (s = 0; cpos[s] && isspace(cpos[s]); s++);
+            strncpy(cbuff, &cpos[s], CELL_DISPLAY_SIZ);
+            for (int k = strlen(&cpos[s]); k < CELL_DISPLAY_SIZ; k++)
+                cbuff[k] = ' ';
+            cbuff[CELL_DISPLAY_SIZ] = '\0';
+            if (nextpos != NULL)
+                nextpos[0] = '\r';
+            printf("%s", cbuff);
+        }
+        printf("%c\n", VERT_CHAR);
+    }
+    printf("   ");
+    for (int j = 0; j < SHEET_COLUMNS; j++) {
+        printf("%c", HORZ_CHAR);
+        for (int k = 0; k < CELL_DISPLAY_SIZ; k++) {
+            printf("%c", HORZ_CHAR);
+        }
+    }
+    printf("%c\n\n", HORZ_CHAR);
+
+    printf("Please enter a value for the spread sheet in one of the following formats \n");
+    printf("\t\t\t1.] cell address = cell value\n");
+    printf("\t\t\t1.] cell address = cell formula\n");
+    printf("Formula ranges must be 1D rows or columns\n");
+    printf("e.g. B3=average(A2,a6)\n");
+    printf("Enter SpreadSheet Data : ");
+    fflush(stdout);
 }
 
+/**
+ * Handle signals to quit the spreadsheet
+ * @param arg
+ * @return 
+ */
 static void *sig_handler(void *arg) {
     sigset_t set;
     int s, sig;
@@ -162,6 +260,14 @@ static void *sig_handler(void *arg) {
     }
 }
 
+/**
+ * Thread to handles receiving communications from the server.
+ * When the spreadsheet is received it displays the spreadsheet.
+ * When the shutdown command is received, it sends the 
+ * 'SIGNAL_QUIT_SPREADSHEET' signal that terminates the program
+ * @param arg
+ * @return 
+ */
 void * networkProcessor(void *arg) {
     int commSocket = *(int*) arg;
     int ires;
@@ -189,6 +295,16 @@ void * networkProcessor(void *arg) {
         switch (ires) {
             case -1: // error occurred
                 switch (errno) {
+                    case ECONNRESET:
+                        // terminate this client handler
+                        //if the server shuts down the connection we terminate this client
+                        gbContinueProcessingSpreadSheet = 0;
+                        printf("Socket Connection TERMINATED by server\n");
+                        union sigval sval;
+                        sval.sival_int = 0;
+                        pthread_sigqueue(pthreadHandler, SIGNAL_QUIT_SPREADSHEET, sval);
+
+                        break;
                     case EBADF:
                         /**
                          * An invalid file descriptor was given in one of the sets.
@@ -221,7 +337,7 @@ void * networkProcessor(void *arg) {
 
             default:
                 if (FD_ISSET(commSocket, &exceptfds)) {
-                    printf("Socket Exception: Error reading scoket\n");
+                    printf("Socket Exception: Error reading socket\n");
                 } else if (FD_ISSET(commSocket, &readfds)) {
                     ires = recv(commSocket, &recvbuf[total], recvbuflen - total, 0);
                     /**
@@ -230,6 +346,15 @@ void * networkProcessor(void *arg) {
 
                     if (ires == -1) {
                         switch (errno) {
+                            case ECONNRESET:
+                                // terminate this client handler
+                                gbContinueProcessingSpreadSheet = 0;
+                                printf("Socket Connection TERMINATED by server\n");
+                                union sigval sval;
+                                sval.sival_int = 0;
+                                pthread_sigqueue(pthreadHandler, SIGNAL_QUIT_SPREADSHEET, sval);
+
+                                break;
                             case EWOULDBLOCK:
                                 /**
                                  * reading would blcok the socket - what sould we do
@@ -253,6 +378,11 @@ void * networkProcessor(void *arg) {
                         // store it in the large buffers
                         // "\r\n\r\n" length = 4
 
+                        /**
+                         * when we receive the "\r\n\r\n" we know that this is
+                         * the end of a command from the server. Process the data and save
+                         * the rest of the data that may be in the buffer, if any.
+                         */
                         total += ires;
                         recvbuf[total] = '\0';
                         char *pstr_find = strstr(recvbuf, "\r\n\r\n");
@@ -396,11 +526,12 @@ int main(int argc, char** argv) {
          * set the keep alive so that the socket is always open
          * the connection is not closed due to inactivity
          * 
-         * we set linger so that is we crash the "**ALL**" of the last data will
-         * still be sent
+         * we set linger so that sockets receive 'ECONNRESET' upon termination
+         * or if the server program crashes
          */
-        lingerOptVal.l_onoff = 0; // true - turn linger on
-        lingerOptVal.l_linger = RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
+
+        lingerOptVal.l_onoff = 1; // true - turn linger on
+        lingerOptVal.l_linger = 0; //RECYCLE_TIMEOUT; // 10 seconds - wait before terminate
         bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_KEEPALIVE, (char*) &bOptVal, bOptLen);
         bOptLen = setsockopt(commSocket, SOL_SOCKET, SO_LINGER, (char*) &lingerOptVal, lingerOptLen);
 
@@ -415,7 +546,7 @@ int main(int argc, char** argv) {
 
         /**
          * Create client processing thread now to handle
-         * network receiving and sread aheet update
+         * network receiving and spread sheet update
          */
         if ((rc = pthread_create(&pthreadClient, NULL, &networkProcessor, (void *) &commSocket))) {
             printf("Client network handling thread creation failed: [%d]\n", rc);
@@ -423,8 +554,10 @@ int main(int argc, char** argv) {
         }
 
         gcommSocket = commSocket;
-        printf("Ready To Start Processing Spread Sheet Requests\n");
 
+        //request th server to send us a refresh of the spreadsheet
+        rc = sendall(commSocket, "***REFRESH\r\n\r\n", strlen("***REFRESH\r\n\r\n"), 0);
+        printf("Ready To Start Processing Spread Sheet Requests\n");
 
         do {
             printf("Please enter a value for the spread sheet in one of the following formats \n");
@@ -434,11 +567,15 @@ int main(int argc, char** argv) {
             printf("e.g. B3=average(A2,a6)\n");
             printf("Enter SpreadSheet Data : ");
 
-            scanf("%1000s", formula_data);
+            //Read all user inputs
+            /* Get the cell data, with size limit. */
+            fgets(formula_data, 1022, stdin);
+            /* Remove trailing newline, if there. */
+            if ((strlen(formula_data) > 0) && (formula_data[strlen(formula_data) - 1] == '\n'))
+                formula_data[strlen(formula_data) - 1] = '\0';
             formula_data[1023] = '\0'; // SANITY
 
             /********************************************************************
-             *  TODO
              * PACKAGE the spread sheet data and send it to the server now
              * 
              * send it off to the server now terminate with "\r\n\r\n"
@@ -462,7 +599,7 @@ int main(int argc, char** argv) {
         } while (gbContinueProcessingSpreadSheet);
 
     } while (0);
-
+    //Upon termination, try to clean up used resources
     if (commSocket != -1)
         close(commSocket);
 
