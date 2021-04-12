@@ -12,7 +12,7 @@
     <logicalFolder name="SourceFiles"
                    displayName="Source Files"
                    projectFiles="true">
-      <itemPath>main.c</itemPath>
+      <itemPath>server.c</itemPath>
     </logicalFolder>
     <logicalFolder name="TestFiles"
                    displayName="Test Files"
@@ -43,7 +43,7 @@
           <commandLine>-pthread</commandLine>
         </linkerTool>
       </compileType>
-      <item path="main.c" ex="false" tool="0" flavor2="0">
+      <item path="server.c" ex="false" tool="0" flavor2="0">
       </item>
     </conf>
     <conf name="Release" type="1">
@@ -67,7 +67,7 @@
           <developmentMode>5</developmentMode>
         </asmTool>
       </compileType>
-      <item path="main.c" ex="false" tool="0" flavor2="0">
+      <item path="server.c" ex="false" tool="0" flavor2="0">
       </item>
     </conf>
   </confs>
